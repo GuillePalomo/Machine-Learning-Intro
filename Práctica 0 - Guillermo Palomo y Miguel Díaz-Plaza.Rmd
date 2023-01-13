@@ -1,0 +1,289 @@
+---
+title: "Práctica 0"
+author: "Guillermo Palomo y Miguel Díaz-Plaza"
+date: "`r Sys.Date()`"
+output:
+  word_document:
+    reference_docx: Mystyleword.docx
+    toc: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+
+library(mlr3data)
+library(skimr)
+library(corrplot)
+
+```
+
+## EDA
+
+```{r}
+
+data("ilpd", package = "mlr3data")
+
+skim(ilpd)
+str(ilpd)
+
+#TRANSFORMAMOS VARIABLES PARA QUE FUNCIONE EL C50
+
+ilpd$age <- as.numeric(ilpd$age)
+ilpd$alkaline_phosphatase <- as.numeric(ilpd$alkaline_phosphatase)
+ilpd$alanine_transaminase <- as.numeric(ilpd$alanine_transaminase)
+ilpd$aspartate_transaminase <- as.numeric(ilpd$aspartate_transaminase)
+
+ilpd1 <- ilpd
+
+
+ilpd1$gender <- as.numeric(ilpd1$gender)
+ilpd1$diseased <-as.numeric(ilpd1$diseased)
+
+
+corrplot(cor(ilpd1),method = "ellipse", type = "upper")
+
+
+plot(ilpd$gender,names.arg = c("Mujeres","Hombres"),col = c("green","lightblue"),ylim = c(0,500),main = paste("Género"),ylab = "Frecuencias absolutas")
+
+plot(ilpd$diseased,names.arg = c("Sí","No"),col = c("green","lightblue"),ylim = c(0,500),main = paste("¿Tiene el paciente una enfermedad en el hígado?"),ylab = "Frecuencias absolutas")
+
+```
+
+
+Disponemos de un dataset de **$583$ observaciones** x **$11$ variables** sin ningún dato faltante.
+
+Con las gráficas muestradas podemos ver como el género en la base de datos se divide entre **$142$ mujeres** y **$441$ hombres**. Además, el número de pacientes **con enfermedad de hígado es de $416$** y el de pacientes **sin enfermedad de hígado es de $167$**.
+
+La variable respuesta `diseased` es categórica por lo que tenemos un **problema de clasificación**, y vemos que tiene muchas más observaciones de enfermos que de sanos.  La mayoría de variables son numéricas y enteros, excepto la variable `gender` que es categórica.
+
+Estas variables no parecen estar muy correladas en general según la matriz de correlaciones.
+
+En los histogramas vemos que `age`,`total_protein` y `albumin` siguen unas distribuciones bastante normales, mientras que el resto acumulan la gran mayoría de sus observaciones en los valores más bajos.
+
+En este apartado, hemos transformado las variables enteras a numéricas para poder utilizar más adelante el C5.0 sin problemas.
+
+
+## MÉTODOS
+
+### rpart con R
+
+```{r}
+
+library(rpart)
+library(rpart.plot)
+
+# Separamos en entrenamiento y test
+set.seed(0)
+indices_train_R_rpart <- sample(1:nrow(ilpd), nrow(ilpd)*3/4, replace=FALSE) #1/4 test y 3/4 entrenamiento
+
+ilpd_train_R_rpart <- ilpd[indices_train_R_rpart,]
+ilpd_test_R_rpart <- ilpd[-indices_train_R_rpart,]
+
+# Entrenamos modelo
+set.seed(0)
+R_rpart_model <-rpart(diseased~.,ilpd_train_R_rpart, method = "class")
+
+# Obtenemos las predicciones
+R_rpart_test <- predict(R_rpart_model, ilpd_test_R_rpart, type = "class")
+
+# Calculamos la accuracy
+R_rpart_accuracy <- sum(ilpd_test_R_rpart$diseased==R_rpart_test)/length(R_rpart_test)
+R_rpart_accuracy
+
+# Visualizamos modelo
+R_rpart_model
+
+# Representamos el árbol
+rpart.plot(R_rpart_model)
+
+```
+
+### rpart CON MLR
+
+
+```{r,warning=FALSE}
+
+library(mlr3)
+library(mlr3learners)
+remotes::install_github("mlr-org/mlr3extralearners")
+library(mlr3extralearners)
+
+
+# Creamos la tarea
+ilpd_task <- as_task_classif(ilpd, target="diseased", id="enfermos")
+
+# Definimos un método de evaluación
+res_desc_mlr3_rpart <- rsmp("holdout", ratio=3/4)
+set.seed(0)
+res_desc_mlr3_rpart$instantiate(ilpd_task)
+
+# Definimos el método de aprendizaje
+tree_learner_mlr3_rpart <- lrn("classif.rpart")
+
+# Entrenamos y evaluamos el modelo con resample
+set.seed(0)
+tree_resample_mlr3_rpart <- resample(task=ilpd_task, 
+                         learner=tree_learner_mlr3_rpart, 
+                         resampling=res_desc_mlr3_rpart,
+                         store_models = TRUE)
+
+# Calculamos la accuracy con resample
+tree_accuracy_rmse_mlr3_rpart <- tree_resample_mlr3_rpart$aggregate(msr("classif.acc"))
+tree_accuracy_rmse_mlr3_rpart
+
+# Visualizamos el modelo
+tree_learner_mlr3_rpart <- tree_resample_mlr3_rpart$learners[[1]]
+tree_learner_mlr3_rpart$model
+
+# Representamos el árbol
+rpart.plot(tree_learner_mlr3_rpart$model)
+
+```
+
+### C5.0 con R
+
+```{r}
+
+library(C50)
+
+# Separamos entre entrenamiento y test
+set.seed(0)
+indices_train_R_C5.0 <- sample(1:nrow(ilpd), nrow(ilpd)*3/4, replace=FALSE) #1/4 test y 3/4 entrenamiento
+
+ilpd_train_R_C5.0 <- ilpd[indices_train_R_C5.0,]
+ilpd_test_R_C5.0 <- ilpd[-indices_train_R_C5.0,]
+
+# Entrenamos modelo
+set.seed(0)
+R_C5.0_model <-C5.0(diseased~.,ilpd_train_R_C5.0)
+
+# Obtenemos las predicciones
+R_C5.0_test <- predict(R_C5.0_model, ilpd_test_R_C5.0, type = "class")
+
+# Calculamos la accuracy
+R_C5.0_accuracy <- sum(ilpd_test_R_C5.0$diseased==R_C5.0_test)/length(R_C5.0_test)
+R_C5.0_accuracy
+
+# Visualizamos modelo
+R_C5.0_model
+
+# Representamos el árbol
+plot(R_C5.0_model)
+
+```
+
+### C5.0 con MLR
+
+```{r}
+
+# Creamos la tarea
+ilpd_task <- as_task_classif(ilpd, target="diseased", id="enfermos")
+
+# Definimos un método de evaluación
+res_desc_mlr3_C5.0 <- rsmp("holdout", ratio=3/4)
+set.seed(0)
+res_desc_mlr3_C5.0$instantiate(ilpd_task)
+
+# Definimos el método de aprendizaje
+tree_learner_mlr3_C5.0 <- lrn("classif.C50")
+
+# Entrenamos y evaluamos el modelo con resample
+set.seed(0)
+tree_resample_mlr3_C5.0 <- resample(task=ilpd_task, 
+                         learner=tree_learner_mlr3_C5.0, 
+                         resampling=res_desc_mlr3_C5.0,
+                         store_models = TRUE)
+
+# Calculamos el error con resample
+tree_accuracy_rmse_mlr3_C5.0 <- tree_resample_mlr3_C5.0$aggregate(msr("classif.acc"))
+tree_accuracy_rmse_mlr3_C5.0
+
+#Visualizamos el modelo
+tree_learner_mlr3_C5.0 <- tree_resample_mlr3_C5.0$learners[[1]]
+tree_learner_mlr3_C5.0$model
+
+```
+
+
+
+## CONCLUSIONES
+
+### Diferencias fundamentales entre el código R para rpart y para C5.0
+
+`rpart` y `C5.0` se tratan de dos librerías distintas, que se cargan , respectivamente, con las librerías `library(rpart)` y `library(C50)`.
+
+En ambas separamos la muestra entre entrenamiento y test de la misma forma. 
+
+La primera diferencia viene obviamente en cómo entrenamos el modelo. En `rpart` utilizamos la función `rpart()`, y por su parte, en `C5.0` utilizamos `C5.0()`. 
+
+Con respecto a las predicciones, aquí observamos una gran diferencia en los resultados, ya que no coinciden.
+
+Esto se ve reflejado en la accuracy, ya que no coincide, de hecho, es más alta con `C5.0` que es de $`0.6986301``$, mientras que la accuracy con `rpart` es de $0.6712329$ . El código de R no presenta cambios.
+
+Observamos que el modelo que genera R de `C5.0` es mucho más sencillo y la información viene más resumida que en el modelo de `rpart` (por ejemplo en el de `C5.0` aparece el tamaño del árbol a simple vista, que es de $33$, y en el de `rpart` no). También, el método `C5.0` carga más rápido.
+
+Por último, la representación del árbol sí que es más visible e intuitiva en `rpart`, aunque hemos tenido que instalar la librería `rpart.plot` y utilizar la función `rpart.plot()`.
+
+
+
+### Desarrollar las diferencias entre el código MLR (rpart y C5.0) y el código R (rpart y C5.0)
+
+El código MLR necesita de la instalación de las librerías `library(mlr3)`, `library(mlr3learners)` y `library(mlr3extralearners)`.
+
+En MLR, creamos una tarea en la que indicamos la variable respuesta y en la que especificamos que es un problema de clasificaión.
+
+Consideramos que la principal diferencia es cómo definimos el método de evaluación. Para ello utilizamos `holdout`, que es una forma de resamplear que nos separa entre entrenamiento y test. Además, con MLR, definimos un método de aprendizaje con `lrn("classif.rpart")` y `lrn("classif.C50")` y entrenamos y evaluamos el modelo con resample. Esto hace más sencillo separar entre entrenamiento y test.
+
+La visualización del modelo con MLR (para `rpart`) nos sale igual a la que hacemos con el código R con `rpart`. Por su parte, el modelo con MLR de `C5.0` (tamaño del árbol $35$) aparece similar que con código R de `C5.0` (tamaño del árbol $33$). La única pega al MLR de `C5.0` es que no hay cómo graficar el árbol como en el resto de métodos.
+
+Por su parte, la accuracy con MLR no varía de la que se obtiene con código R.
+
+Por tanto, podemos decir que MLR nos aporta simplicidad en el código con respecto a R y hace mucho más automáticas algunas tareas, que pueden ser tediosas sin usar estas librerías.
+
+### Las accuracies(o ce) de test. ¿Coinciden en R y en MLR? ¿Qué método es mejor?
+
+Las accuracies y errores de test **coinciden en R y MLR**, pero son **diferentes entre `rpart` y `C5.0`**, siendo **mejor** la librería **`C5.0`** según esta métrica.
+
+```{r}
+
+set.seed(0)
+Accuracies<-data.frame(c(R_rpart_accuracy,R_C5.0_accuracy,tree_accuracy_rmse_mlr3_rpart,tree_accuracy_rmse_mlr3_C5.0))
+rownames(Accuracies)=c("R rpart","R C5.0","mlr3 rpart","mlr3 C5.0")
+colnames(Accuracies)=c("Accuracies")
+Accuracies
+
+```
+
+Al ser un caso de detección de enfermos, preferimos que el modelo prediga falsos positivos a negativos. Para hallar qué método es mejor según este punto de vista, utilizamos las matrices de confusión.
+
+```{r}
+
+table(ilpd_test_R_rpart$diseased,R_rpart_test)
+table(ilpd_test_R_C5.0$diseased,R_C5.0_test)
+
+```
+
+Según las tablas, el mejor método es el C5.0 ya que proporciona menos falsos negativos 214 < 22..
+
+### Los 5 primeros índices usados en la partición de entrenamiento y los 5 primeros de la partición de test. ¿Coinciden en R y en MLR?
+
+**Sí coinciden en todos**. Tanto con código R (para `rpart` y `C5.0`), como con MLR (para `rpart` y `C5.0`) ya que hemos usado para todos la misma semilla, y se fueran diferentes, los modelos entre R y MLR no coincidirían como hemos visto.
+
+```{r}
+head(indices_train_R_rpart,5)
+head(indices_train_R_C5.0,5)
+```
+
+### Las 5 primeras predicciones de los datos de test. ¿Coinciden en R y en MLR?
+
+Las predicciones de los datos de test **coinciden en R y MLR**, pero son **diferentes entre `rpart` y `C5.0`**
+
+```{r}
+head(R_rpart_test,5)
+head(R_C5.0_test,5)
+```
+
